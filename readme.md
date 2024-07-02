@@ -1,6 +1,6 @@
 # PASAL
 
-Pytorch Implementation of the NAACL Paper: Source-Free Unsupervised Domain Adaptation for Question Answering via Prompt-Assisted Self-learning
+Pytorch Implementation of the NAACL Paper: [Source-Free Unsupervised Domain Adaptation for Question Answering via Prompt-Assisted Self-learning](https://aclanthology.org/2024.findings-naacl.44/)
 
 ![](model.png)
 
