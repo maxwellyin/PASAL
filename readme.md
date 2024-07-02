@@ -1,4 +1,4 @@
-# MDAQA
+# PASAL
 
 Pytorch Implementation of the NAACL Paper: Source-Free Unsupervised Domain Adaptation for Question Answering via Prompt-Assisted Self-learning
 
@@ -45,5 +45,21 @@ python model-sf-after-p-sf.py
 
 If you found this repository is helpful, please cite our paper:
 ```
-
+@inproceedings{yin-etal-2024-source,
+    title = "Source-Free Unsupervised Domain Adaptation for Question Answering via Prompt-Assisted Self-learning",
+    author = "Yin, Maxwell  and
+      Wang, Boyu  and
+      Ling, Charles",
+    editor = "Duh, Kevin  and
+      Gomez, Helena  and
+      Bethard, Steven",
+    booktitle = "Findings of the Association for Computational Linguistics: NAACL 2024",
+    month = jun,
+    year = "2024",
+    address = "Mexico City, Mexico",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2024.findings-naacl.44",
+    pages = "700--713",
+    abstract = "This work addresses source-free domain adaptation (SFDA) for Question Answering (QA), wherein a model trained on a source domain is adapted to unlabeled target domains without additional source data. Existing SFDA methods only focus on the adaptation phase, overlooking the impact of source domain training on model generalizability. In this paper, we argue that source model training itself is also critical for improving the adaptation performance and stability. To this end, we investigate the role of prompt learning as an effective method to internalize domain-agnostic QA knowledge, which can be integrated into source training. After source training, an interactive self-learning strategy is proposed to further fine tune both model and prompt in the model adaptation phase. This leads to the Prompt-Assisted Self-Adaptive Learning (PASAL), an innovative SFDA approach for QA. Empirical evaluation on four benchmark datasets shows that PASAL surpasses existing methods in managing domain gaps and demonstrates greater stability across various target domains, validating the significance of source domain training for effective domain adaptation.",
+}
 ```
