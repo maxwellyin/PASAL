@@ -1,9 +1,8 @@
-from tqdm.auto import tqdm
-from transformers import T5Tokenizer
 import os
-from nltk.tokenize import sent_tokenize
-import evaluate
 import numpy as np
+import evaluate
+from nltk.tokenize import sent_tokenize
+from transformers import T5Tokenizer
 from .util import MODEL_CHECKPOINT
 
 if "google" in MODEL_CHECKPOINT:

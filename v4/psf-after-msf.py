@@ -1,115 +1,75 @@
-# %%
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-# %%
-import torch, shutil
-import numpy as np
-from tqdm.auto import tqdm
-from torch.optim import AdamW, Adam
-from datasets import DatasetDict, load_from_disk
-from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, Seq2SeqTrainingArguments, DataCollatorForSeq2Seq, Seq2SeqTrainer, T5Tokenizer, pipeline
-from utils.util import preprocess_training_examples, preprocess_validation_examples, compute_metrics, pad_prompt_length, SOURCE_DOMAIN, TARGET_DOMAIN, MODEL_CHECKPOINT, PROMPT_LENGTH, T5_MAX_INPUT_LENGTH, SEED, format_for_lmqg
-from os import path, makedirs
-from accelerate import Accelerator
+import argparse
+from pathlib import Path
+
+from transformers import AutoTokenizer
+
+from utils.experiments import load_raw_target_datasets, self_train_once
 from utils.model import T5ForConditionalGeneration as PromptT5
-# %%
-TRAIN_DATA = f"../../largeQA/data/{TARGET_DOMAIN}_train"
-TEST_DATA = f"../../largeQA/data/{TARGET_DOMAIN}_test"
-VAL_SPLIT = 'test'
-BATCH_SIZE = 8
-model_name = MODEL_CHECKPOINT.split("/")[-1]
-model_checkpoint = f"./checkpoint/{model_name}-{SOURCE_DOMAIN}/msf-no-finetune-on-source/{TARGET_DOMAIN}/0/"
+from utils.pseudo_labeling import filter_answer_in_context, make_nonprompt_seq2seq_qa_pseudo_labeler
+from utils.runtime import DEFAULT_DATA_ROOT, V4_ROOT, maybe_set_cuda_visible_devices, model_slug, resolve_data_dir
+from utils.util import MODEL_CHECKPOINT, PROMPT_LENGTH, SEED, SOURCE_DOMAIN, TARGET_DOMAIN, set_tokenizer_checkpoint
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_CHECKPOINT)
-model = PromptT5.from_pretrained(model_checkpoint)
-# %%
-pmaxlen = T5_MAX_INPUT_LENGTH - PROMPT_LENGTH
-func1 = lambda x: pad_prompt_length(preprocess_training_examples(x, max_length=pmaxlen))
-func2 = lambda x: pad_prompt_length(preprocess_validation_examples(x, max_length=pmaxlen))
-# %%
-train_datasets = load_from_disk(TRAIN_DATA)
-train_datasets = train_datasets.select(range(10000)).shuffle(SEED)
-test_dataset = load_from_disk(TEST_DATA)
-raw_datasets = DatasetDict({
-    'train': train_datasets,
-    'test': test_dataset})
 
-# %%
-def train(train_dataset, validation_dataset, model):
-    train_dataset2 = train_dataset.map(func1, batched=True, remove_columns=train_dataset.column_names)
-    validation_datasets = validation_dataset.map(func2, batched=True, remove_columns=validation_dataset.column_names)
+def parse_args():
+    parser = argparse.ArgumentParser(description="Prompt-only self-training after the non-prompt MSF baseline.")
+    parser.add_argument("--source-domain", default=SOURCE_DOMAIN, help="Source domain used to name checkpoints.")
+    parser.add_argument("--target-domain", default=TARGET_DOMAIN, help="Target domain to adapt to.")
+    parser.add_argument("--model-checkpoint", default=MODEL_CHECKPOINT, help="Backbone checkpoint used for tokenization.")
+    parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT, help="Directory containing processed datasets.")
+    parser.add_argument("--checkpoint-path", type=Path, default=None, help="Initial checkpoint to continue training from.")
+    parser.add_argument("--output-root", type=Path, default=V4_ROOT / "checkpoint", help="Directory used to save checkpoints.")
+    parser.add_argument("--batch-size", type=int, default=8, help="Per-device train and eval batch size.")
+    parser.add_argument("--epochs", type=int, default=1, help="Number of self-training epochs.")
+    parser.add_argument("--learning-rate", type=float, default=1e-3, help="Optimizer learning rate.")
+    parser.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay.")
+    parser.add_argument("--train-subset", type=int, default=10000, help="Optional limit on target training examples.")
+    parser.add_argument("--seed", type=int, default=SEED, help="Random seed used for dataset shuffling.")
+    parser.add_argument("--qg-model", default="lmqg/flan-t5-base-squad-qg", help="Question-generation checkpoint.")
+    parser.add_argument("--cuda-visible-devices", default=None, help="Optional CUDA_VISIBLE_DEVICES override.")
+    return parser.parse_args()
 
-    # Freeze all parameters
-    for param in model.parameters():
-        param.requires_grad = False
 
-    # Set requires_grad to True only for prompt_embedding
-    model.encoder.prompt_embedding.requires_grad = True
+def main():
+    args = parse_args()
+    maybe_set_cuda_visible_devices(args.cuda_visible_devices)
+    set_tokenizer_checkpoint(args.model_checkpoint)
 
-    batch_size = BATCH_SIZE
-    num_train_epochs = 1
-    # Show the training loss with every epoch
-    args = Seq2SeqTrainingArguments(
-        output_dir=f"./checkpoint/prompt-{model_name}-{SOURCE_DOMAIN}/prompt-sf/{TARGET_DOMAIN}",
-        evaluation_strategy="epoch",
-        learning_rate=1e-3,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size,
-        weight_decay=0.01,
-        save_total_limit=3,
-        num_train_epochs=num_train_epochs,
-        predict_with_generate=True,
-        logging_strategy = "epoch",
-        report_to="tensorboard",
-        fp16=False,
+    model_name = model_slug(args.model_checkpoint)
+    checkpoint_path = args.checkpoint_path or (
+        args.output_root / f"{model_name}-{args.source_domain}" / "msf-no-finetune-on-source" / args.target_domain / "0"
+    )
+    output_dir = args.output_root / f"prompt-{model_name}-{args.source_domain}" / "prompt-sf" / args.target_domain
+
+    train_path = resolve_data_dir(args.data_root, args.target_domain, "train")
+    test_path = resolve_data_dir(args.data_root, args.target_domain, "test")
+    raw_datasets = load_raw_target_datasets(train_path, test_path, seed=args.seed, train_subset=args.train_subset)
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_checkpoint)
+    model = PromptT5.from_pretrained(str(checkpoint_path))
+    pseudo_label_fn = make_nonprompt_seq2seq_qa_pseudo_labeler(tokenizer, str(checkpoint_path), args.qg_model)
+    model, outcome, pseudo_dataset, filtered_dataset = self_train_once(
+        raw_datasets=raw_datasets,
+        pseudo_label_fn=pseudo_label_fn,
+        pseudo_filter_fn=filter_answer_in_context,
+        model=model,
+        model_checkpoint=args.model_checkpoint,
+        output_dir=output_dir,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        trainable_strategy="prompt_only",
+        use_prompt=True,
     )
 
-    tokenizer = T5Tokenizer.from_pretrained(MODEL_CHECKPOINT)
-    data_collator = DataCollatorForSeq2Seq(tokenizer, model=model)
-
-    trainer = Seq2SeqTrainer(
-        model,
-        args,
-        train_dataset=train_dataset2,
-        eval_dataset=validation_datasets,
-        data_collator=data_collator,
-        tokenizer=tokenizer,
-        compute_metrics=compute_metrics,
-    )
-
-    trainer.train()
-    outcome = trainer.evaluate()
-    print(outcome, '\n')
-    return model, outcome
-
-# %%
-def main(i:int, model):
-    question_generation = pipeline("text2text-generation", "lmqg/flan-t5-base-squad-qg", device=torch.cuda.is_available()-1)
-
-    qa_model = AutoModelForSeq2SeqLM.from_pretrained(model_checkpoint)
-    question_answerer = pipeline("text2text-generation", model=qa_model, tokenizer=tokenizer, device=torch.cuda.is_available()-1)
-
-    def create_pseudo_label(example):
-        qg_input = format_for_lmqg(example)
-        output_qg = question_generation(qg_input)[0]['generated_text']
-        qa_input = f"question: {output_qg} context: {example['context']}"
-        out = question_answerer(qa_input)[0]['generated_text']
-        answers = {'text': [out], 'answer_start': example['answers']['answer_start']}
-        return {'question': output_qg, 'answers': answers}
-
-    pseudo_set = raw_datasets['train'].map(create_pseudo_label, load_from_cache_file=False)
-    pseudo_set2 = pseudo_set.filter(lambda example: example['answers']['text'][0] in example['context'])
-    print(f"pseudo_set2 length: {len(pseudo_set2)}")
-
-    model, outcome = train(pseudo_set2, raw_datasets['test'], model)
-    return model, outcome
-# %%
-outcomes = []
-for i in range(1):
-    model, outcome = main(i, model)
-    outcomes.append(outcome)
-    model.save_pretrained(f"./checkpoint/prompt-{model_name}-{SOURCE_DOMAIN}/prompt-sf/{TARGET_DOMAIN}/final/{i}")
-for outcome in outcomes:
+    final_dir = output_dir / "final" / "0"
+    model.save_pretrained(str(final_dir))
+    print(f"pseudo_set length: {len(pseudo_dataset)}")
+    print(f"filtered pseudo_set length: {len(filtered_dataset)}")
+    print(f"INPUT_CHECKPOINT: {checkpoint_path}")
+    print(f"OUTPUT_CHECKPOINT: {final_dir}")
     print(outcome)
-# %%
+
+
+if __name__ == "__main__":
+    main()

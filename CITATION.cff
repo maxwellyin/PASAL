@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+title: "PASAL"
+message: "If you use this repository, please cite the associated paper."
+type: software
+authors:
+  - family-names: "Yin"
+    given-names: "Maxwell"
+  - family-names: "Wang"
+    given-names: "Boyu"
+  - family-names: "Ling"
+    given-names: "Charles"
+repository-code: "https://github.com/maxwellyin/PASAL"
+license: "NOASSERTION"
+preferred-citation:
+  type: conference-paper
+  authors:
+    - family-names: "Yin"
+      given-names: "Maxwell"
+    - family-names: "Wang"
+      given-names: "Boyu"
+    - family-names: "Ling"
+      given-names: "Charles"
+  title: "Source-Free Unsupervised Domain Adaptation for Question Answering via Prompt-Assisted Self-learning"
+  year: 2024
+  booktitle: "Findings of the Association for Computational Linguistics: NAACL 2024"
+  start: 700
+  end: 713
+  url: "https://aclanthology.org/2024.findings-naacl.44/"

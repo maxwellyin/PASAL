@@ -1,0 +1,10 @@
+torch
+transformers
+datasets
+accelerate
+evaluate
+numpy
+tqdm
+nltk
+sentencepiece
+rouge_score

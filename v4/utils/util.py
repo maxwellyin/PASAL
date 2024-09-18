@@ -1,11 +1,8 @@
-import collections
 import numpy as np
-from tqdm.auto import tqdm
 from transformers import T5Tokenizer
-from nltk.tokenize import sent_tokenize
-import os
 
 SEED = 8888
+DEFAULT_BATCH_SIZE = 4
 PROMPT_LENGTH = 100
 T5_MAX_INPUT_LENGTH = 512
 NUM_LOOPS = 10
@@ -19,9 +16,29 @@ TARGET_DOMAIN = "NaturalQuestionsShort"
 MODEL_CHECKPOINT = "google/flan-t5-base"
 # MODEL_CHECKPOINT = "t5-base"
 
-tokenizer = T5Tokenizer.from_pretrained(MODEL_CHECKPOINT)
+_TOKENIZER = None
+_TOKENIZER_CHECKPOINT = None
+
+
+def get_tokenizer(model_checkpoint=None):
+    global _TOKENIZER
+    global _TOKENIZER_CHECKPOINT
+
+    checkpoint = model_checkpoint or MODEL_CHECKPOINT
+    if _TOKENIZER is None or _TOKENIZER_CHECKPOINT != checkpoint:
+        _TOKENIZER = T5Tokenizer.from_pretrained(checkpoint)
+        _TOKENIZER_CHECKPOINT = checkpoint
+    return _TOKENIZER
+
+
+def set_tokenizer_checkpoint(model_checkpoint):
+    get_tokenizer(model_checkpoint)
+
+
+tokenizer = get_tokenizer()
 
 def preprocess_training_examples(batch, max_length=512, stride=256):
+    tokenizer = get_tokenizer()
     batch_size = len(batch['question'])
     new_batch = {"id": [], "input_ids": [], "attention_mask": [], "labels": []}
     
@@ -87,6 +104,7 @@ def preprocess_training_examples(batch, max_length=512, stride=256):
     return new_batch
 
 def preprocess_validation_examples(batch, max_length=512, stride=256):
+    tokenizer = get_tokenizer()
     batch_size = len(batch['question'])
     new_batch = {"id": [], "input_ids": [], "attention_mask": [], "labels": []}
     
@@ -149,6 +167,7 @@ def preprocess_validation_examples(batch, max_length=512, stride=256):
     return new_batch
 
 def pad_prompt_length(batch, prompt_length=PROMPT_LENGTH):
+    tokenizer = get_tokenizer()
     padded_batch = {
         # "id": [],
         "input_ids": [],
@@ -229,6 +248,7 @@ def _compute_metrics(predictions, ground_truths):
     return {"F1": f1_avg, "EM": em_avg}
 
 def compute_metrics(eval_pred):
+    tokenizer = get_tokenizer()
     predictions, labels = eval_pred
     # Decode predictions and labels into text
     decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
@@ -267,3 +287,4 @@ def question2batch(question:str, context: str):
     pmaxlen = T5_MAX_INPUT_LENGTH - PROMPT_LENGTH
     batch2 = preprocess_validation_examples(batch, max_length=pmaxlen)
     batch3 = pad_prompt_length(batch2)
+    return batch3

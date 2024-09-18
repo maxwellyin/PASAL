@@ -1,67 +1,56 @@
-# %%
-import torch
-import os
-from tqdm.auto import tqdm
-from datasets import load_from_disk, DatasetDict
-from transformers import AutoModelForSeq2SeqLM, Seq2SeqTrainingArguments, DataCollatorForSeq2Seq, Seq2SeqTrainer, T5Tokenizer
-from utils.util import preprocess_training_examples, preprocess_validation_examples, compute_metrics, SOURCE_DOMAIN, MODEL_CHECKPOINT
-# %%
-TRAIN_DATA = f"../../largeQA/data/{SOURCE_DOMAIN}_train"
-TEST_DATA = f"../../largeQA/data/{SOURCE_DOMAIN}_test"
-model_checkpoint = MODEL_CHECKPOINT
-# %%
-raw_train_datasets = load_from_disk(TRAIN_DATA)
-raw_validation_datasets = load_from_disk(TEST_DATA)
-# %%
-train_datasets = raw_train_datasets.map(preprocess_training_examples, batched=True, remove_columns=raw_train_datasets.column_names)
-validation_datasets = raw_validation_datasets.map(preprocess_validation_examples, batched=True, remove_columns=raw_validation_datasets.column_names)
+import argparse
+from pathlib import Path
 
-tokenized_datasets = DatasetDict({'train': train_datasets, 'validation': validation_datasets})
-# %%
-model = AutoModelForSeq2SeqLM.from_pretrained(model_checkpoint)
-# %%
-batch_size = 4
-num_train_epochs = 8
-# Show the training loss with every epoch\
-logging_steps = len(tokenized_datasets["train"]) // batch_size
+from transformers import AutoModelForSeq2SeqLM
 
-model_name = model_checkpoint.split("/")[-1]
-output_dir=f"./checkpoint/{model_name}-{SOURCE_DOMAIN}",
+from utils.experiments import load_train_validation_splits, train_seq2seq_model
+from utils.runtime import DEFAULT_DATA_ROOT, V4_ROOT, maybe_set_cuda_visible_devices, model_slug, resolve_data_dir
+from utils.util import MODEL_CHECKPOINT, SOURCE_DOMAIN, set_tokenizer_checkpoint
 
-args = Seq2SeqTrainingArguments(
-    output_dir=f"./checkpoint/tmp/finetune/{model_name}-{SOURCE_DOMAIN}",
-    evaluation_strategy="epoch",
-    logging_strategy="epoch",
-    learning_rate=5.6e-5,
-    per_device_train_batch_size=batch_size,
-    per_device_eval_batch_size=batch_size,
-    weight_decay=0.01,
-    save_total_limit=3,
-    num_train_epochs=num_train_epochs,
-    predict_with_generate=True,
-    report_to="tensorboard",
-    fp16=False, # Overflows with fp16
-)
-# %%
-tokenizer = T5Tokenizer.from_pretrained(MODEL_CHECKPOINT)
-data_collator = DataCollatorForSeq2Seq(tokenizer, model=model)
 
-trainer = Seq2SeqTrainer(
-    model,
-    args,
-    train_dataset=tokenized_datasets["train"],
-    eval_dataset=tokenized_datasets["validation"],
-    data_collator=data_collator,
-    tokenizer=tokenizer,
-    compute_metrics=compute_metrics,
-)
-# %%
-trainer.train()
-# %%
-print(trainer.evaluate())
-# %%
-# after training
-model.save_pretrained(f"./checkpoint/{model_name}-{SOURCE_DOMAIN}/base/final")
-print("MODEL_CHECKPOINT:", MODEL_CHECKPOINT)
-print("SOURCE_DOMAIN:", SOURCE_DOMAIN)
-print(f"{os.path.basename(__file__)} finished.")
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run the standard seq2seq fine-tuning baseline.")
+    parser.add_argument("--source-domain", default=SOURCE_DOMAIN, help="Source domain name.")
+    parser.add_argument("--model-checkpoint", default=MODEL_CHECKPOINT, help="Backbone checkpoint.")
+    parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT, help="Directory containing processed datasets.")
+    parser.add_argument("--output-root", type=Path, default=V4_ROOT / "checkpoint", help="Directory used to save checkpoints.")
+    parser.add_argument("--batch-size", type=int, default=4, help="Per-device train and eval batch size.")
+    parser.add_argument("--epochs", type=int, default=8, help="Number of training epochs.")
+    parser.add_argument("--learning-rate", type=float, default=5.6e-5, help="Optimizer learning rate.")
+    parser.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay.")
+    parser.add_argument("--cuda-visible-devices", default=None, help="Optional CUDA_VISIBLE_DEVICES override.")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    maybe_set_cuda_visible_devices(args.cuda_visible_devices)
+    set_tokenizer_checkpoint(args.model_checkpoint)
+
+    train_path = resolve_data_dir(args.data_root, args.source_domain, "train")
+    test_path = resolve_data_dir(args.data_root, args.source_domain, "test")
+    tokenized_datasets = load_train_validation_splits(train_path, test_path, use_prompt=False)
+
+    model_name = model_slug(args.model_checkpoint)
+    output_dir = args.output_root / f"{model_name}-{args.source_domain}" / "base"
+    model = AutoModelForSeq2SeqLM.from_pretrained(args.model_checkpoint)
+    model, outcome = train_seq2seq_model(
+        model=model,
+        model_checkpoint=args.model_checkpoint,
+        output_dir=output_dir,
+        train_dataset=tokenized_datasets["train"],
+        validation_dataset=tokenized_datasets["validation"],
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+    )
+
+    final_dir = output_dir / "final"
+    model.save_pretrained(str(final_dir))
+    print(outcome)
+    print(f"Saved model to: {final_dir}")
+
+
+if __name__ == "__main__":
+    main()
