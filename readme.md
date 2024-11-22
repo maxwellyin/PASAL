@@ -18,7 +18,7 @@ The repository explores two connected ideas:
 1. prompt-assisted source training to improve transferability,
 2. interactive self-learning on the target domain using pseudo question-answer pairs.
 
-The codebase contains the implementation used for the paper as a research repository. It is intentionally script-oriented: experiments are organized as standalone training and evaluation drivers under [`v4/`](v4/).
+The codebase contains the implementation used for the paper as a research repository. It is now organized into a lightweight Python package plus script entry points, which makes the project easier to read and reuse.
 
 ## Highlights
 
@@ -33,23 +33,26 @@ The codebase contains the implementation used for the paper as a research reposi
 PASAL/
 ├── readme.md               # Project overview and setup instructions
 ├── requirements.txt        # Python dependencies
+├── environment.yml         # Conda environment definition
+├── pyproject.toml          # Formatting and linting config
 ├── CITATION.cff            # Citation metadata for GitHub
 ├── model.png               # Figure from the paper
-└── v4/
-    ├── README.md           # Script-by-script guide
-    ├── prompt-tuning.py    # Source-domain prompt tuning
-    ├── model-sf-after-p-sf.py
-    ├── sf.py
-    ├── sf_prompt.py
-    ├── eva.py
-    └── utils/
-        ├── experiments.py  # Shared training/self-training helpers
-        ├── model.py        # Customized T5 implementation with prompt embeddings
-        ├── pseudo_labeling.py
-        ├── runtime.py      # Shared runtime/path helpers
-        ├── util.py         # Preprocessing, metrics, constants
-        ├── qg.py           # Question generation utilities
-        └── ae.py           # Answer extraction utilities
+├── scripts/
+│   ├── prompt_tuning.py        # Source-domain prompt tuning
+│   ├── adapt_pasal.py          # Main PASAL adaptation pipeline
+│   ├── eval.py                 # Evaluation entry point
+│   ├── finetune_baseline.py    # Standard seq2seq baseline
+│   └── ...
+├── pasal/
+│   ├── model.py                # Customized T5 implementation with prompt embeddings
+│   ├── experiments.py          # Shared training/self-training helpers
+│   ├── pseudo_labeling.py      # Pseudo-label generation strategies
+│   ├── runtime.py              # Shared runtime/path helpers
+│   ├── util.py                 # Preprocessing, metrics, constants
+│   ├── qg.py                   # Question generation utilities
+│   └── ae.py                   # Answer extraction utilities
+└── legacy/
+    └── README.md               # Notes on the archived historical layout
 ```
 
 ## Environment Setup
@@ -92,21 +95,20 @@ with names such as:
 - `NaturalQuestionsShort_train`
 - `NaturalQuestionsShort_test`
 
-The default source and target domains are defined in [`v4/utils/util.py`](v4/utils/util.py).
+The default source and target domains are defined in [`pasal/util.py`](pasal/util.py).
 
 ## Quick Start
 
 ### 1. Train the source-domain prompt model
 
 ```bash
-cd v4
-python prompt-tuning.py
+python scripts/prompt_tuning.py
 ```
 
 For example, to override the source domain or data path:
 
 ```bash
-python prompt-tuning.py \
+python scripts/prompt_tuning.py \
   --source-domain SQuAD \
   --data-root /path/to/largeQA/data \
   --cuda-visible-devices 0
@@ -122,13 +124,13 @@ This script:
 ### 2. Adapt to the target domain
 
 ```bash
-python model-sf-after-p-sf.py
+python scripts/adapt_pasal.py
 ```
 
 For example:
 
 ```bash
-python model-sf-after-p-sf.py \
+python scripts/adapt_pasal.py \
   --target-domain NaturalQuestionsShort \
   --train-subset 10000 \
   --cuda-visible-devices 0
@@ -144,25 +146,25 @@ This script:
 ### 3. Evaluate on a target domain
 
 ```bash
-python eva.py
+python scripts/eval.py
 ```
 
 Or evaluate an explicit checkpoint:
 
 ```bash
-python eva.py \
+python scripts/eval.py \
   --target-domain NewsQA \
-  --checkpoint-path ./checkpoint/prompt-flan-t5-base-SQuAD/base/final
+  --checkpoint-path ./checkpoints/prompt-flan-t5-base-SQuAD/base/final
 ```
 
-For a more detailed script guide, see [`v4/README.md`](v4/README.md).
+For a more detailed script guide, see [`scripts/README.md`](scripts/README.md).
 
 ## Reproducibility Notes
 
 - Many experiment settings are configured as constants inside the scripts rather than CLI arguments.
 - The main scripts now expose CLI flags for dataset roots, domains, checkpoints, and optional `CUDA_VISIBLE_DEVICES`.
-- Shared training and pseudo-labeling logic now lives in reusable helper modules under `v4/utils/`.
-- Some legacy experimental variants under `v4/` still preserve their original hard-coded research setup.
+- Shared training and pseudo-labeling logic now lives in reusable helper modules under [`pasal/`](pasal/).
+- The original historical `v4/` layout has been de-emphasized for presentation purposes and treated as legacy.
 - The repository preserves the original experimental layout from the paper rather than a fully refactored training package.
 
 In other words, this repo is intended to document and expose the research implementation faithfully, while remaining practical to inspect and rerun.
